@@ -16,7 +16,6 @@ local concat = table.concat
 local insert = table.insert
 local tostring = tostring
 local setmetatable = setmetatable
-local error = error
 local ipairs = ipairs
 
 
@@ -26,12 +25,10 @@ local _M = { _VERSION = '0.2.1' }
 -- constants
 
 local INTERNAL_SERVER_ERROR = 0xBF
-local OP_REPLICATION = 0xB1
 local OP_PLAY_SCRIPT = 0xB4
 local OP_SET_BULK = 0xB8
 local OP_REMOVE_BULK = 0xB9
 local OP_GET_BULK = 0xBA
-
 
 -- Every numeric value are expressed in big-endian order.
 
@@ -67,7 +64,7 @@ end
 
 
 local function _set_byte2 (n)
-   return strchar(band(rshift(n, 8), 0xff), band(n, 0xff)) 
+   return strchar(band(rshift(n, 8), 0xff), band(n, 0xff))
 end
 
 
@@ -81,6 +78,7 @@ end
 
 local function _set_byte8 (n)
    local hn = n * 4294967296
+
    return strchar(band(rshift(hn, 24), 0xff),
                   band(rshift(hn, 16), 0xff),
                   band(rshift(hn, 8), 0xff),
@@ -102,7 +100,7 @@ end
 local mt = { __index = _M }
 
 
-function _M.new (self)
+function _M.new()
    local sock, err = tcp()
    if not sock then
       return nil, err
@@ -111,13 +109,8 @@ function _M.new (self)
 end
 
 
-function _M.replication (self, ts, sid)
-   return "not implemented", nil
-end
-
-
-function _M.play_script (self, name, tab)
-   local flags = flags or 0
+function _M:play_script(name, tab)
+   local flags = 0
    local sock = self.sock
 
    if not name or not tab or #tab == 0 then
@@ -125,7 +118,7 @@ function _M.play_script (self, name, tab)
    end
 
    local t = { _set_byte4(#name) }  -- nsiz
-   
+
    insert(t, _set_byte4(#tab))      -- rnum
    insert(t, name)                  -- procedure name
 
@@ -143,8 +136,8 @@ function _M.play_script (self, name, tab)
    if not bytes then
       return nil, "fail to send packet: " .. err
    end
-   
-   local data, err = sock:receive(5) 
+
+   local data, err = sock:receive(5)
    if not data then
       return nil, "failed to receive packet: " .. err
    end
@@ -160,26 +153,26 @@ function _M.play_script (self, name, tab)
    --print("hits= ", num)
 
    -- data
-   local results = {}
-   for i=1, num do
-      local t = {}
-      data, err = sock:receive(8) 
+   local results, ksiz, vsiz = {}
+   for _=1, num do
+      local res = {}
+      data = sock:receive(8)
 
-      local ksiz, pos = _get_byte4(data, 1)
+      ksiz, pos = _get_byte4(data, 1)
       --print("ksiz= ", ksiz)
-      
-      local vsiz = _get_byte4(data, pos)
+
+      vsiz = _get_byte4(data, pos)
       --print("vsiz= ", vsiz)
-      
-      data, err = sock:receive(ksiz) 
+
+      data = sock:receive(ksiz)
       --print("key= ", data)
-      t["key"] = data
+      res["key"] = data
 
-      data, err = sock:receive(vsiz) 
+      data = sock:receive(vsiz)
       --print("val= ", data)
-      t["value"] = data
+      res["value"] = data
 
-      results[#results+1] = t
+      results[#results+1] = res
    end
 
    if #results == 0 then
@@ -191,7 +184,7 @@ end
 
 
 local function _set_bulk (self, tab)
-   local flags = flags or 0
+   local flags = 0
    local sock = self.sock
 
    if not tab or #tab == 0 then
@@ -208,7 +201,7 @@ local function _set_bulk (self, tab)
       end
       local xt = v[3] or 0xffffffff   -- max int ???
       local dbidx = v[4] or 0
-      insert(t, _set_byte2(dbidx))    -- dbidx 
+      insert(t, _set_byte2(dbidx))    -- dbidx
       insert(t, _set_byte4(#key))     -- ksiz
       insert(t, _set_byte4(#value))   -- vsiz
       insert(t, _set_byte8(xt))       -- xt
@@ -222,7 +215,7 @@ local function _set_bulk (self, tab)
       return nil, "fail to send packet: " .. err
    end
 
-   local data, err = sock:receive(5) 
+   local data, err = sock:receive(5)
    if not data then
       return nil, "failed to receive packet: " .. err
    end
@@ -244,13 +237,13 @@ end
 _M.set_bulk = _set_bulk
 
 
-function _M.set (self, ...)
+function _M:set(...)
    return _set_bulk(self, {{...}})
 end
 
 
-local function _remove_bulk (self, tab)
-   local flags = flags or 0
+local function _remove_bulk(self, tab)
+   local flags = 0
    local sock = self.sock
 
    if not tab or #tab == 0 then
@@ -261,7 +254,7 @@ local function _remove_bulk (self, tab)
 
    for _, v in ipairs(tab) do
       local key = v
-      insert(t, _set_byte2(0))        -- dbidx 
+      insert(t, _set_byte2(0))        -- dbidx
       insert(t, _set_byte4(#key))     -- ksiz
       insert(t, key)                  -- key
    end
@@ -272,7 +265,7 @@ local function _remove_bulk (self, tab)
       return nil, "fail to send packet: " .. err
    end
 
-   local data, err = sock:receive(5) 
+   local data, err = sock:receive(5)
    if not data then
       return nil, "failed to receive packet: " .. err
    end
@@ -294,24 +287,67 @@ end
 _M.remove_bulk = _remove_bulk
 
 
-function _M.remove (self, key)
+function _M:remove(key)
    return _remove_bulk(self, {key})
 end
 
+do
+	local request = {
+		_set_byte(OP_GET_BULK),
+		_set_byte4(0), -- flags
+		_set_byte4(1), -- 1 key
+		_set_byte2(0), -- database index 0
+	}
+
+	function _M:get(key)
+		if not key then
+			return nil, "missing argument"
+		end
+
+		local sock, klen = self.sock, #key
+
+		request[5], request[6] = _set_byte4(klen), key
+
+		local data, err = sock:send(request)
+		if not data then
+			return nil, "fail to send packet: " .. (err or 'unknown')
+		end
+
+		data, err = sock:receive(5)
+		if not data then
+			return nil, "failed to receive packet: " .. (err or 'unknown')
+		end
+
+		if (_get_byte(data, 1)) == INTERNAL_SERVER_ERROR then
+			return nil, "internal server error"
+		end
+
+		if (_get_byte4(data, 2)) == 0 then
+			return nil -- not found
+		end
+
+		data, err = sock:receive(18+klen)
+
+		if not data then
+			return nil, "failed to receive packet: " .. (err or 'unknown')
+		end
+
+		return sock:receive((_get_byte4(data, 7)))
+	end
+end
 
 local function _get_bulk (self, tab)
-   local flags = flags or 0
-   local sock = self.sock
+   local sock, flags = self.sock, 0
 
    if not tab or #tab == 0 then
-      return nil, "invalid arguemtns"
+      return nil, "missing argument"
    end
 
    local t = { _set_byte4(#tab) }    -- rnum
 
    for _, v in ipairs(tab) do
       local key = v
-      insert(t, _set_byte2(0))        -- dbidx 
+      insert(t, _set_byte2(0))        -- dbidx
       insert(t, _set_byte4(#key))     -- ksiz
       insert(t, key)                  -- key
    end
@@ -322,7 +358,7 @@ local function _get_bulk (self, tab)
       return nil, "fail to send packet: " .. err
    end
 
-   local data, err = sock:receive(5) 
+   local data, err = sock:receive(5)
    if not data then
       return nil, "failed to receive packet: " .. err
    end
@@ -333,40 +369,40 @@ local function _get_bulk (self, tab)
       return nil, "interner server error"
    end
 
-   local num, pos = _get_byte4(data, pos)
+   local num = _get_byte4(data, pos)
 
    --print("hits= ", num)
 
    -- data
    local results = {}
 
-   for i=1, num do
-      local t = {}
-      data, err = sock:receive(18) 
+   for _=1, num do
+      local res, ksiz, vsiz = {}
+      data = sock:receive(18)
 
-      rv, pos = _get_byte2(data, 1)
+      rv, pos = _get_byte2(data, 1) -- 1,2
       --print("dbidx= ", rv)
       t["dbidx"] = rv
 
-      local ksiz, pos = _get_byte4(data, pos)
+      ksiz, pos = _get_byte4(data, pos) -- 3,4,5,6
       --print("ksiz= ", ksiz)
-      
-      local vsiz, pos = _get_byte4(data, pos)
+
+      vsiz, pos = _get_byte4(data, pos) -- 7,8,9.10
       --print("vsiz= ", vsiz)
-      
+
       local xt = _get_byte8(data, pos)
       --print("xt= ", xt)
-      t["xt"] = xt
+      res["xt"] = xt
 
-      data, err = sock:receive(ksiz) 
+      data = sock:receive(ksiz)
       --print("key= ", data)
-      t["key"] = data
+      res["key"] = data
 
-      data, err = sock:receive(vsiz) 
+      data = sock:receive(vsiz)
       --print("val= ", data)
-      t["value"] = data
+      res["value"] = data
 
-      results[#results+1] = t
+      results[#results+1] = res
    end
 
    if #results == 0 then
@@ -376,70 +412,30 @@ local function _get_bulk (self, tab)
    end
 end
 
-
 _M.get_bulk = _get_bulk
 
-
-function _M.get (self, key)
-   local res, err = _get_bulk(self, {key})
-   if not res then
-      return nil, err
-   end
-
-   local t = res[1]
-   return t.value, nil
+function _M:set_timeout(timeout)
+   return self.sock:settimeout(timeout)
 end
 
 
-function _M.set_timeout (self, timeout)
-   local sock = self.sock
-   if not sock then
-      return nil, "not initialized"
-   end
-
-   return sock:settimeout(timeout)
+function _M:connect(...)
+   return self.sock:connect(...)
 end
 
 
-function _M.connect (self, ...)
-   local sock = self.sock
-   if not sock then
-      return nil, "not initialized"
-   end
-
-   return sock:connect(...)
+function _M:set_keepalive(...)
+   return self.sock:setkeepalive(...)
 end
 
 
-function _M.set_keepalive (self, ...)
-   local sock = self.sock
-   if not sock then
-      return nil, "not initialized"
-   end
-
-   return sock:setkeepalive(...)
+function _M:get_reused_times()
+	return self.sock:getreusedtimes()
 end
 
 
-function _M.get_reused_times (self)
-   local sock = self.sock
-   if not sock then
-      return nil, "not initialized"
-   end
-
-   return sock:getreusedtimes()
+function _M:close()
+	return self.sock:close()
 end
-
-
-function _M.close (self)
-   local sock = self.sock
-   if not sock then
-      return nil, "not initialized"
-   end
-
-   return sock:close()
-end
-
 
 return _M
-
